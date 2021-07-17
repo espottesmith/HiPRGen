@@ -14,16 +14,16 @@ from HiPRGen.constants import ROOM_TEMP
 metals = frozenset(["Li", "Na", "K", "Mg", "Ca", "Zn", "Al"])
 m_formulas = frozenset([m + "1" for m in metals])
 
-solvation_correction = {
-    "Li" : -0.68,
-    }
-
 coordination_radius = {
-    "Li" : 2.4,
+    "Li_1" : 2.4,
+    "Mg_1": 2.4,
+    "Mg_2": 2.4
     }
 
 max_number_of_coordination_bonds = {
-    "Li" : 4,
+    "Li_1" : 4,
+    "Mg_1": 5,
+    "Mg_2": 6
     }
 
 class MoleculeEntry(MSONable):
@@ -48,7 +48,8 @@ class MoleculeEntry(MSONable):
         entry_id: Optional[Any] = None,
         mol_graph: Optional[MoleculeGraph] = None,
         partial_charges_resp: Optional[list] = None,
-        partial_charges_mulliken: Optional[list] = None
+        partial_charges_mulliken: Optional[list] = None,
+        solvation_correction: Optional[dict] = None,
     ):
         self.energy = energy
         self.enthalpy = enthalpy
@@ -60,7 +61,7 @@ class MoleculeEntry(MSONable):
         self.star_hashes = {}
         self.fragment_hashes = []
 
-
+        self.solvation_correction = solvation_correction
 
         self.entry_id = entry_id
 
@@ -102,6 +103,7 @@ class MoleculeEntry(MSONable):
             site.coords for site in self.molecule]
 
 
+        self.number_of_coordination_bonds = 0
         self.number_of_coordination_bonds = 0
         self.free_energy = self.get_free_energy()
         self.solvation_free_energy = self.get_solvation_free_energy()
@@ -157,6 +159,7 @@ class MoleculeEntry(MSONable):
         cls,
         doc: Dict,
         use_thermo: str = "raw",
+        solvation_correction: Optional[Dict] = None,
     ):
         """
         Initialize a MoleculeEntry from a document in the LIBE (Lithium-Ion
@@ -230,7 +233,8 @@ class MoleculeEntry(MSONable):
             entry_id=entry_id,
             mol_graph=mol_graph,
             partial_charges_resp=partial_charges_resp,
-            partial_charges_mulliken=partial_charges_mulliken
+            partial_charges_mulliken=partial_charges_mulliken,
+            solvation_correction=solvation_correction
         )
 
 
@@ -264,15 +268,32 @@ class MoleculeEntry(MSONable):
 
         # this method should only be called once, but just to be safe,
         # reset the coordination bond count
-        self.number_of_coordination_bonds = 0
+
+        if any([x is None for x in [
+            self.solvation_correction,
+            self.partial_charges_mulliken,
+            self.partial_charges_resp
+        ]]):
+            return self.free_energy
 
         correction = 0.0
 
         for i in self.m_inds:
 
             species = self.species[i]
-            coordination_partners = []
-            radius = coordination_radius[species]
+            partial_charge = self.partial_charges_mulliken[i]
+
+            if 0.5 <= partial_charge < 1.25:
+                effective_charge = "_1"
+            elif partial_charge >= 1.25:
+                effective_charge = "_2"
+            else:
+                # Not a cation - no correction available currently
+                continue
+
+            coordination_partners = list()
+            species_charge = species + effective_charge
+            radius = coordination_radius[species_charge]
 
             for j in range(self.num_atoms):
                 if j != i:
@@ -286,11 +307,10 @@ class MoleculeEntry(MSONable):
                             self.partial_charges_mulliken[j] < 0)):
                         coordination_partners.append(j)
 
-
             number_of_coordination_bonds = len(coordination_partners)
             self.number_of_coordination_bonds += number_of_coordination_bonds
-            correction += solvation_correction[species] * (
-                max_number_of_coordination_bonds[species] -
+            correction += self.solvation_correction[species_charge] * (
+                max_number_of_coordination_bonds[species_charge] -
                 number_of_coordination_bonds)
 
         return correction + self.free_energy
