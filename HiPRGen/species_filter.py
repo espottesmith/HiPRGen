@@ -87,7 +87,8 @@ def species_filter(
         species_report,
         species_decision_tree=standard_species_decision_tree,
         species_logging_decision_tree=standard_species_logging_decision_tree,
-        solvation_correction=solvation_correction_ec):
+        solvation_correction=solvation_correction_ec,
+        generate_unfiltered_mol_pictures=False):
 
 
     log_message("starting species filter")
@@ -104,7 +105,7 @@ def species_filter(
         mol_entries_unfiltered,
         species_report,
         mol_pictures_folder_name='mol_pictures_unfiltered',
-        rebuild_mol_pictures=False
+        rebuild_mol_pictures=True
     )
 
     report_generator.emit_text("species report")
