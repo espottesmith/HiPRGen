@@ -93,28 +93,104 @@ def add_star_hashes(mol):
 
     return False
 
+def add_unbroken_fragment(width, mol):
+    if mol.formula in m_formulas:
+        return False
 
-def add_fragment_hashes(mol):
+    neighborhood_hashes = {}
+
+    for i in mol.non_metal_atoms:
+        hash_list = []
+        for d in range(width):
+            neighborhood = nx.generators.ego.ego_graph(
+                mol.covalent_graph,
+                i,
+                d,
+                undirected=True)
+
+            neighborhood_hash = weisfeiler_lehman_graph_hash(
+                neighborhood,
+                node_attr='specie')
+
+            hash_list.append(neighborhood_hash)
+
+        neighborhood_hashes[i] = hash(tuple(hash_list))
+
+    fragment = Fragment(
+        mol.covalent_hash,
+        mol.non_metal_atoms,
+        neighborhood_hashes,
+        mol.covalent_graph,
+        []
+    )
+
+    fragment_complex = FragmentComplex(
+        1,
+        0,
+        [],
+        [fragment])
+
+    mol.fragment_data.append(fragment_complex)
+
+    return False
+
+
+def add_single_bond_fragments(width, mol):
     if mol.formula in m_formulas:
         return False
 
 
     for edge in mol.covalent_graph.edges:
+        fragments = []
         h = copy.deepcopy(mol.covalent_graph)
         h.remove_edge(*edge)
         connected_components = nx.algorithms.components.connected_components(h)
-        fragment_hashes = [
-            weisfeiler_lehman_graph_hash(
-                h.subgraph(c),
+        for c in connected_components:
+
+            subgraph = h.subgraph(c)
+
+            fragment_hash = weisfeiler_lehman_graph_hash(
+                subgraph,
                 node_attr='specie')
 
-            for c in connected_components
-            ]
 
-        mol.fragment_hashes.append(fragment_hashes)
+            neighborhood_hashes = {}
+            for i in c:
+                hash_list = []
+                for d in range(width):
+                    neighborhood = nx.generators.ego.ego_graph(
+                        subgraph,
+                        i,
+                        d,
+                        undirected=True)
+
+                    neighborhood_hash = weisfeiler_lehman_graph_hash(
+                        neighborhood,
+                        node_attr='specie')
+
+                    hash_list.append(neighborhood_hash)
+
+                neighborhood_hashes[i] = hash(tuple(hash_list))
+
+            fragment = Fragment(
+                fragment_hash,
+                c,
+                neighborhood_hashes,
+                subgraph,
+                [i for i in c if i in edge[0:2]]
+            )
+
+            fragments.append(fragment)
+
+        fragment_complex = FragmentComplex(
+            len(fragments),
+            1,
+            [edge[0:2]],
+            fragments)
+
+        mol.fragment_data.append(fragment_complex)
 
     return False
-
 
 
 def metal_complex(mol):
@@ -177,14 +253,24 @@ def default_true(mol):
     return True
 
 
+fragment_neighborhood_width = 5
+
+# any species filter which modifies bonding has to come before
+# any filter checking for connectivity (which includes the metal-centric complex filter)
+
 standard_species_decision_tree = [
-    (mol_not_connected, Terminal.DISCARD),
-    (metal_ion_filter, Terminal.DISCARD),
-    (metal_complex, Terminal.DISCARD),
-    (bad_metal_coordination, Terminal.DISCARD),
     (fix_hydrogen_bonding, Terminal.KEEP),
+    (metal_ion_filter, Terminal.DISCARD),
+    (bad_metal_coordination, Terminal.DISCARD),
+    (mol_not_connected, Terminal.DISCARD),
+    (metal_complex, Terminal.DISCARD),
     (add_star_hashes, Terminal.KEEP),
-    (add_fragment_hashes, Terminal.KEEP),
+
+    (partial(add_unbroken_fragment,
+             fragment_neighborhood_width), Terminal.KEEP),
+    (partial(add_single_bond_fragments,
+             fragment_neighborhood_width), Terminal.KEEP),
+
     (default_true, Terminal.KEEP)
     ]
 

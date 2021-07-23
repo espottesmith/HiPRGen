@@ -1,6 +1,7 @@
 import math
 from HiPRGen.mol_entry import *
 from functools import partial
+import itertools
 from HiPRGen.constants import *
 
 """
@@ -245,79 +246,227 @@ def reaction_is_covalent_decomposable(reaction, mols, params):
     return False
 
 
+def metal_coordination_passthrough(reaction, mols, params):
 
-def no_fragment_matching_found(reaction, mols, params):
-
-    # is a reactant or a product is a single atom, then this breaks
-    # TODO: fix this
     for i in range(reaction['number_of_reactants']):
         reactant_id = reaction['reactants'][i]
         reactant = mols[reactant_id]
-        if reactant.num_atoms == 1:
-            return False
+        if reactant.formula in m_formulas:
+            return True
 
     for i in range(reaction['number_of_products']):
         product_id = reaction['products'][i]
         product = mols[product_id]
-        if reactant.num_atoms == 1:
-            return False
+        if product.formula in m_formulas:
+            return True
+
+    return False
 
 
+
+def fragment_matching_found(reaction, mols, params):
+
+    reactant_fragment_indices_list = []
+    product_fragment_indices_list = []
 
     if reaction['number_of_reactants'] == 1:
         reactant = mols[reaction['reactants'][0]]
-        reactant_fragments = set([frozenset([reactant.covalent_hash])])
-        for fragments in reactant.fragment_hashes:
-            reactant_fragments.add(
-                frozenset(fragments))
+        for i in range(len(reactant.fragment_data)):
+            reactant_fragment_indices_list.append([i])
 
-    elif reaction['number_of_reactants'] == 2:
+
+    if reaction['number_of_reactants'] == 2:
         reactant_0 = mols[reaction['reactants'][0]]
         reactant_1 = mols[reaction['reactants'][1]]
+        for i in range(len(reactant_0.fragment_data)):
+            for j in range(len(reactant_1.fragment_data)):
+                if (reactant_0.fragment_data[i].number_of_bonds_broken +
+                    reactant_1.fragment_data[j].number_of_bonds_broken <= 1):
 
-        reactant_fragments = set([
-            frozenset([reactant_0.covalent_hash, reactant_1.covalent_hash])
-        ])
-
-        for fragments in reactant_0.fragment_hashes:
-            reactant_fragments.add(
-                frozenset(fragments + [reactant_1.covalent_hash]))
-
-        for fragments in reactant_1.fragment_hashes:
-            reactant_fragments.add(
-                frozenset(fragments + [reactant_0.covalent_hash]))
+                    reactant_fragment_indices_list.append([i,j])
 
 
     if reaction['number_of_products'] == 1:
-
         product = mols[reaction['products'][0]]
-        product_fragments = set([frozenset([product.covalent_hash])])
-        for fragments in product.fragment_hashes:
-            product_fragments.add(
-                frozenset(fragments))
+        for i in range(len(product.fragment_data)):
+            product_fragment_indices_list.append([i])
 
-    elif reaction['number_of_products'] == 2:
 
+    if reaction['number_of_products'] == 2:
         product_0 = mols[reaction['products'][0]]
         product_1 = mols[reaction['products'][1]]
+        for i in range(len(product_0.fragment_data)):
+            for j in range(len(product_1.fragment_data)):
+                if (product_0.fragment_data[i].number_of_bonds_broken +
+                    product_1.fragment_data[j].number_of_bonds_broken <= 1):
 
-        product_fragments = set([
-            frozenset([product_0.covalent_hash, product_1.covalent_hash])
-        ])
-
-        for fragments in product_0.fragment_hashes:
-            product_fragments.add(
-                frozenset(fragments + [product_1.covalent_hash]))
-
-        for fragments in product_1.fragment_hashes:
-            product_fragments.add(
-                frozenset(fragments + [product_0.covalent_hash]))
+                    product_fragment_indices_list.append([i,j])
 
 
-    if len(reactant_fragments.intersection(product_fragments)) == 0:
-        return True
-    else:
-        return False
+    for reactant_fragment_indices in reactant_fragment_indices_list:
+        for product_fragment_indices in product_fragment_indices_list:
+            reactant_fragment_count = 0
+            product_fragment_count = 0
+            reactant_bonds_broken = []
+            product_bonds_broken = []
+
+            reactant_hashes = set()
+            for reactant_index, frag_complex_index in enumerate(
+                    reactant_fragment_indices):
+
+                fragment_complex = mols[
+                    reaction['reactants'][reactant_index]].fragment_data[
+                        frag_complex_index]
+
+                for bond in fragment_complex.bonds_broken:
+                    reactant_bonds_broken.append([(reactant_index, x) for x in bond])
+
+                for i in range(fragment_complex.number_of_fragments):
+                    reactant_fragment_count += 1
+                    reactant_hashes.add(
+                        fragment_complex.fragments[i].fragment_hash)
+
+
+            product_hashes = set()
+            for product_index, frag_complex_index in enumerate(
+                    product_fragment_indices):
+
+                fragment_complex = mols[
+                    reaction['products'][product_index]].fragment_data[
+                        frag_complex_index]
+
+                for bond in fragment_complex.bonds_broken:
+                    product_bonds_broken.append([(product_index, x) for x in bond])
+
+
+                for i in range(fragment_complex.number_of_fragments):
+                    product_fragment_count += 1
+                    product_hashes.add(
+                        fragment_complex.fragments[i].fragment_hash)
+
+            # don't consider fragmentations with both a ring opening and closing
+            if (reaction['number_of_reactants'] == 2 and
+                reaction['number_of_products'] == 2 and
+                reactant_fragment_count == 2 and
+                product_fragment_count == 2):
+                continue
+
+            if reactant_hashes == product_hashes:
+                reaction['reactant_fragments'] = reactant_fragment_indices
+                reaction['product_fragments'] = product_fragment_indices
+                reaction['reactant_bonds_broken'] = reactant_bonds_broken
+                reaction['product_bonds_broken'] = product_bonds_broken
+                return True
+
+    return False
+
+
+
+
+
+def atom_mapping(reaction, mols, params):
+
+
+    # compute all ways to match up the fragments and store in fragment_mappings
+    fragments_by_hash = {}
+    bond_change = 0
+
+    for i in range(reaction['number_of_reactants']):
+        reactant = mols[reaction['reactants'][i]]
+        fragment_complex = reactant.fragment_data[
+            reaction['reactant_fragments'][i]]
+
+        bond_change += fragment_complex.number_of_bonds_broken
+
+        for fragment in fragment_complex.fragments:
+            tag = fragment.fragment_hash
+
+            if tag not in fragments_by_hash:
+                fragments_by_hash[tag] = ([],[])
+
+            fragments_by_hash[tag][0].append((i,fragment))
+
+
+    for j in range(reaction['number_of_products']):
+        product = mols[reaction['products'][j]]
+        fragment_complex = product.fragment_data[
+            reaction['product_fragments'][j]]
+
+        bond_change += fragment_complex.number_of_bonds_broken
+
+
+        for fragment in fragment_complex.fragments:
+            tag = fragment.fragment_hash
+
+            if tag not in fragments_by_hash:
+                fragments[tag] = ([],[])
+
+            fragments_by_hash[tag][1].append((j,fragment))
+
+    fragments = fragments_by_hash.values()
+    product_sym_iterator = itertools.product(*[
+        sym_iterator(len(f[0])) for
+        f in fragments ])
+
+    fragment_mappings = []
+    for product_perm in product_sym_iterator:
+        fragment_mapping = []
+        for perm, matching_fragments in zip(product_perm, fragments):
+            for i, j in enumerate(perm):
+                fragment_mapping.append(
+                    (matching_fragments[0][i],
+                     matching_fragments[1][j]))
+
+        fragment_mappings.append(fragment_mapping)
+
+
+    for fragment_mapping in fragment_mappings:
+        atom_mapping_parts = []
+
+        # if only 1 bond is changing, we don't need to enforce reaction center
+        if bond_change < 2:
+            hot_found = True
+        else:
+            hot_found = False
+
+
+        for (i, fragment_1), (j,fragment_2) in fragment_mapping:
+
+            if hot_found:
+                mapping = find_fragment_atom_mappings(
+                    fragment_1,
+                    fragment_2,
+                    return_one=True)[0]
+
+                atom_mapping_parts.append((i,j,mapping))
+
+            else:
+                all_mappings = find_fragment_atom_mappings(
+                    fragment_1,
+                    fragment_2)
+
+                hot_preserving_mapping = find_hot_atom_preserving_fragment_map(
+                    fragment_1,
+                    fragment_2,
+                    all_mappings)
+
+                if hot_preserving_mapping is not None:
+                    atom_mapping_parts.append((i,j,hot_preserving_mapping))
+                    hot_found = True
+                else:
+                    atom_mapping_parts.append((i,j,all_mappings[0]))
+
+        if hot_found:
+            combined_map = {}
+            for i, j, mapping in atom_mapping_parts:
+                for atom_index in mapping.keys():
+                    combined_map[(i,atom_index)] = (j, mapping[atom_index])
+
+            reaction['atom_map'] = combined_map
+            return True
+
+    return False
+
 
 
 def concerted_metal_coordination(reaction, mols, params):
@@ -359,6 +508,32 @@ def concerted_metal_coordination_one_product(reaction, mols, params):
 
     return False
 
+
+def concerted_metal_coordination_one_reactant(reaction, mols, params):
+
+    if (reaction['number_of_reactants'] == 1 and
+        reaction['number_of_products'] == 2):
+
+        product_0 = mols[reaction['products'][0]]
+        product_1 = mols[reaction['products'][1]]
+        reactant = mols[reaction['reactants'][0]]
+
+        product_covalent_hashes = set([
+            product_0.covalent_hash,
+            product_1.covalent_hash])
+
+        if ((product_0.formula in m_formulas or
+            product_1.formula in m_formulas) and
+            reactant.covalent_hash not in product_covalent_hashes
+            ):
+            return True
+        else:
+            return False
+
+    return False
+
+
+
 standard_reaction_decision_tree = [
     (partial(dG_above_threshold, 0.5), Terminal.DISCARD),
 
@@ -375,12 +550,21 @@ standard_reaction_decision_tree = [
 
     (reaction_is_covalent_decomposable, Terminal.DISCARD),
 
-    (no_fragment_matching_found, Terminal.DISCARD),
-
     (concerted_metal_coordination, Terminal.DISCARD),
 
     (concerted_metal_coordination_one_product, Terminal.DISCARD),
-    (default_true, Terminal.KEEP)
+
+    (concerted_metal_coordination_one_reactant, Terminal.DISCARD),
+
+    (metal_coordination_passthrough, Terminal.KEEP),
+
+    (fragment_matching_found, [
+
+        (atom_mapping, Terminal.KEEP),
+        (default_true, Terminal.DISCARD)
+    ]),
+
+    (default_true, Terminal.DISCARD)
     ]
 
 

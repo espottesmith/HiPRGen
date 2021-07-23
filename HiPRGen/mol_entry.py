@@ -9,6 +9,7 @@ from pymatgen.analysis.local_env import OpenBabelNN, metal_edge_extender
 from pymatgen.core.structure import Molecule
 from networkx.algorithms.graph_hashing import weisfeiler_lehman_graph_hash
 from HiPRGen.constants import ROOM_TEMP
+from itertools import permutations, product
 
 
 metals = frozenset(["Li", "Na", "K", "Mg", "Ca", "Zn", "Al"])
@@ -25,6 +26,114 @@ max_number_of_coordination_bonds = {
     "Mg_1": 5,
     "Mg_2": 6
     }
+
+
+class Fragment:
+    def __init__(
+            self,
+            fragment_hash,
+            atom_ids,
+            neighborhood_hashes,
+            graph,
+            hot_atoms
+    ):
+
+        self.fragment_hash = fragment_hash
+        self.atom_ids = atom_ids
+        self.neighborhood_hashes = neighborhood_hashes
+        self.graph = graph
+        self.hot_atoms = hot_atoms
+
+
+def sym_iterator(n):
+    return permutations(range(n), r=n)
+
+
+def find_fragment_atom_mappings(fragment_1, fragment_2, return_one=False):
+    groups_by_hash = {}
+
+    for left_index in fragment_1.atom_ids:
+
+        neighborhood_hash = fragment_1.neighborhood_hashes[left_index]
+        if neighborhood_hash not in groups_by_hash:
+            groups_by_hash[neighborhood_hash] = ([],[])
+
+        groups_by_hash[neighborhood_hash][0].append(left_index)
+
+
+    for right_index in fragment_2.atom_ids:
+
+        neighborhood_hash = fragment_2.neighborhood_hashes[right_index]
+        if neighborhood_hash not in groups_by_hash:
+            groups_by_hash[neighborhood_hash] = ([],[])
+
+        groups_by_hash[neighborhood_hash][1].append(right_index)
+
+    groups = list(groups_by_hash.values())
+
+    product_sym_iterator = product(*[
+        sym_iterator(len(p[0])) for
+        p in groups ])
+
+    mappings = []
+
+    for product_perm in product_sym_iterator:
+        mapping = {}
+        for perm, vals in zip(product_perm, groups):
+            for i, j in enumerate(perm):
+                mapping[vals[0][i]] = vals[1][j]
+
+        isomorphism = True
+        for edge in fragment_1.graph.edges:
+            u = mapping[edge[0]]
+            v = mapping[edge[1]]
+            if not fragment_2.graph.has_edge(u,v):
+                isomorphism = False
+                break
+
+
+        if isomorphism:
+            mappings.append(mapping)
+
+            if return_one:
+                return mappings
+
+    return mappings
+
+def find_hot_atom_preserving_fragment_map(
+        fragment_1,
+        fragment_2,
+        mappings):
+
+    for mapping in mappings:
+        hot_atom_preserving = False
+        for hot_atom in fragment_1.hot_atoms:
+            if mapping[hot_atom] in fragment_2.hot_atoms:
+                hot_atom_preserving = True
+                break
+
+        if hot_atom_preserving:
+            return mapping
+
+    return None
+
+
+
+class FragmentComplex:
+
+    def __init__(
+            self,
+            number_of_fragments,
+            number_of_bonds_broken,
+            bonds_broken,
+            fragments):
+
+        self.number_of_fragments = number_of_fragments
+        self.number_of_bonds_broken = number_of_bonds_broken
+        self.bonds_broken = bonds_broken
+        self.fragments = fragments
+
+
 
 class MoleculeEntry(MSONable):
     """
@@ -57,9 +166,10 @@ class MoleculeEntry(MSONable):
 
 
         self.ind = None
+        self.entry_id = entry_id
 
         self.star_hashes = {}
-        self.fragment_hashes = []
+        self.fragment_data = []
 
         self.solvation_correction = solvation_correction
 
@@ -108,51 +218,12 @@ class MoleculeEntry(MSONable):
         self.free_energy = self.get_free_energy()
         self.solvation_free_energy = self.get_solvation_free_energy()
 
+        self.non_metal_atoms = [
+            i for i in range(self.num_atoms)
+            if self.species[i] not in metals]
 
 
-    @classmethod
-    def from_molecule_document(
-        cls,
-        mol_doc: Dict,
-    ):
-        """
-        Initialize a MoleculeEntry from a molecule document.
 
-        Args:
-            mol_doc: MongoDB molecule document (nested dictionary) that contains the
-                molecule information.
-        """
-        try:
-            if isinstance(mol_doc["molecule"], Molecule):
-                molecule = mol_doc["molecule"]
-            else:
-                molecule = Molecule.from_dict(mol_doc["molecule"])  # type: ignore
-            energy = mol_doc["energy_Ha"]
-            enthalpy = mol_doc["enthalpy_kcal/mol"]
-            entropy = mol_doc["entropy_cal/molK"]
-            entry_id = mol_doc["task_id"]
-        except KeyError as e:
-            raise MoleculeEntryError(
-                "Unable to construct molecule entry from molecule document; missing "
-                f"attribute {e} in `mol_doc`."
-            )
-
-        if "mol_graph" in mol_doc:
-            if isinstance(mol_doc["mol_graph"], MoleculeGraph):
-                mol_graph = mol_doc["mol_graph"]
-            else:
-                mol_graph = MoleculeGraph.from_dict(mol_doc["mol_graph"])
-        else:
-            mol_graph = None
-
-        return cls(
-            molecule=molecule,
-            energy=energy,
-            enthalpy=enthalpy,
-            entropy=entropy,
-            entry_id=entry_id,
-            mol_graph=mol_graph,
-        )
 
     @classmethod
     def from_dataset_entry(

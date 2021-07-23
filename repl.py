@@ -14,5 +14,8 @@ params={
 reaction = {
     'number_of_reactants' : 2,
     'number_of_products' : 2,
-    'reactants' : [53,53],
-    'products' : [189,9]}
+    'reactants' : [52, 52],
+    'products' : [10, 190]
+}
+
+fragment_matching_found(reaction, network_loader.mol_entries, params)
