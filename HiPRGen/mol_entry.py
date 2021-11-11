@@ -3,30 +3,31 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
-from monty.json import MSONable
 from pymatgen.analysis.graphs import MoleculeGraph, MolGraphSplitError
 from pymatgen.analysis.local_env import OpenBabelNN, metal_edge_extender
 from pymatgen.core.structure import Molecule
 from networkx.algorithms.graph_hashing import weisfeiler_lehman_graph_hash
-from HiPRGen.constants import ROOM_TEMP
+from HiPRGen.constants import ROOM_TEMP, metals
+from itertools import permutations, product
 
 
-metals = frozenset(["Li", "Na", "K", "Mg", "Ca", "Zn", "Al"])
-m_formulas = frozenset([m + "1" for m in metals])
+class FragmentComplex:
 
-solvation_correction = {
-    "Li" : -0.68,
-    }
+    def __init__(
+            self,
+            number_of_fragments,
+            number_of_bonds_broken,
+            bonds_broken,
+            fragment_hashes):
 
-coordination_radius = {
-    "Li" : 2.4,
-    }
+        self.number_of_fragments = number_of_fragments
+        self.number_of_bonds_broken = number_of_bonds_broken
+        self.bonds_broken = bonds_broken
+        self.fragment_hashes = fragment_hashes
 
-max_number_of_coordination_bonds = {
-    "Li" : 4,
-    }
 
-class MoleculeEntry(MSONable):
+
+class MoleculeEntry:
     """
     A molecule entry class to provide easy access to Molecule properties.
 
@@ -41,28 +42,32 @@ class MoleculeEntry(MSONable):
 
     def __init__(
         self,
-        molecule: Molecule,
-        energy: float,
-        enthalpy: Optional[float] = None,
-        entropy: Optional[float] = None,
-        entry_id: Optional[Any] = None,
-        mol_graph: Optional[MoleculeGraph] = None,
-        partial_charges_resp: Optional[list] = None,
-        partial_charges_mulliken: Optional[list] = None
+        molecule,
+        energy,
+        enthalpy,
+        entropy,
+        entry_id,
+        mol_graph,
+        partial_charges_resp,
+        partial_charges_mulliken,
+        partial_charges_nbo,
+        electron_affinity,
+        ionization_energy,
+        spin_multiplicity
     ):
         self.energy = energy
         self.enthalpy = enthalpy
         self.entropy = entropy
-
+        self.electron_affinity = electron_affinity
+        self.ionization_energy = ionization_energy
+        self.spin_multiplicity = spin_multiplicity
 
         self.ind = None
+        self.entry_id = entry_id
 
         self.star_hashes = {}
-        self.fragment_hashes = []
+        self.fragment_data = []
 
-
-
-        self.entry_id = entry_id
 
         if not mol_graph:
             mol_graph = MoleculeGraph.with_local_env_strategy(molecule, OpenBabelNN())
@@ -72,6 +77,8 @@ class MoleculeEntry(MSONable):
 
         self.partial_charges_resp = partial_charges_resp
         self.partial_charges_mulliken = partial_charges_mulliken
+        self.partial_charges_nbo = partial_charges_nbo
+
         self.molecule = self.mol_graph.molecule
         self.graph = self.mol_graph.graph.to_undirected()
         self.species = [str(s) for s in self.molecule.species]
@@ -85,15 +92,6 @@ class MoleculeEntry(MSONable):
         self.covalent_graph.remove_nodes_from(self.m_inds)
 
 
-        self.total_hash = weisfeiler_lehman_graph_hash(
-                self.graph,
-                node_attr='specie')
-
-        self.covalent_hash = weisfeiler_lehman_graph_hash(
-                self.covalent_graph,
-                node_attr='specie')
-
-
         self.formula = self.molecule.composition.alphabetical_formula
         self.charge = self.molecule.charge
         self.num_atoms = len(self.molecule)
@@ -102,55 +100,14 @@ class MoleculeEntry(MSONable):
             site.coords for site in self.molecule]
 
 
-        self.number_of_coordination_bonds = 0
         self.free_energy = self.get_free_energy()
-        self.solvation_free_energy = self.get_solvation_free_energy()
+
+        self.non_metal_atoms = [
+            i for i in range(self.num_atoms)
+            if self.species[i] not in metals]
 
 
 
-    @classmethod
-    def from_molecule_document(
-        cls,
-        mol_doc: Dict,
-    ):
-        """
-        Initialize a MoleculeEntry from a molecule document.
-
-        Args:
-            mol_doc: MongoDB molecule document (nested dictionary) that contains the
-                molecule information.
-        """
-        try:
-            if isinstance(mol_doc["molecule"], Molecule):
-                molecule = mol_doc["molecule"]
-            else:
-                molecule = Molecule.from_dict(mol_doc["molecule"])  # type: ignore
-            energy = mol_doc["energy_Ha"]
-            enthalpy = mol_doc["enthalpy_kcal/mol"]
-            entropy = mol_doc["entropy_cal/molK"]
-            entry_id = mol_doc["task_id"]
-        except KeyError as e:
-            raise MoleculeEntryError(
-                "Unable to construct molecule entry from molecule document; missing "
-                f"attribute {e} in `mol_doc`."
-            )
-
-        if "mol_graph" in mol_doc:
-            if isinstance(mol_doc["mol_graph"], MoleculeGraph):
-                mol_graph = mol_doc["mol_graph"]
-            else:
-                mol_graph = MoleculeGraph.from_dict(mol_doc["mol_graph"])
-        else:
-            mol_graph = None
-
-        return cls(
-            molecule=molecule,
-            energy=energy,
-            enthalpy=enthalpy,
-            entropy=entropy,
-            entry_id=entry_id,
-            mol_graph=mol_graph,
-        )
 
     @classmethod
     def from_dataset_entry(
@@ -214,8 +171,24 @@ class MoleculeEntry(MSONable):
 
             partial_charges_resp = doc['partial_charges']['resp']
             partial_charges_mulliken = doc['partial_charges']['mulliken']
+            spin_multiplicity = doc['spin_multiplicity']
+
+            if 'nbo' in doc['partial_charges']:
+                partial_charges_nbo = doc['partial_charges']['nbo']
+            else:
+                partial_charges_nbo = None
+
+            electron_affinity_eV = None
+            ionization_energy_eV = None
+            if 'redox' in doc:
+                if 'electron_affinity_eV' in doc['redox']:
+                    electron_affinity_eV = doc['redox']['electron_affinity_eV']
+
+                if 'ionization_energy_eV' in doc['redox']:
+                    ionization_energy_eV = doc['redox']['ionization_energy_eV']
+
         except KeyError as e:
-            raise MoleculeEntryError(
+            raise Exception(
                 "Unable to construct molecule entry from molecule document; missing "
                 f"attribute {e} in `doc`."
             )
@@ -230,7 +203,11 @@ class MoleculeEntry(MSONable):
             entry_id=entry_id,
             mol_graph=mol_graph,
             partial_charges_resp=partial_charges_resp,
-            partial_charges_mulliken=partial_charges_mulliken
+            partial_charges_mulliken=partial_charges_mulliken,
+            partial_charges_nbo=partial_charges_nbo,
+            electron_affinity=electron_affinity_eV,
+            ionization_energy=ionization_energy_eV,
+            spin_multiplicity=spin_multiplicity
         )
 
 
@@ -248,53 +225,6 @@ class MoleculeEntry(MSONable):
             )
         else:
             return None
-
-
-    def get_solvation_free_energy(self):
-        """
-        metal atoms coordinate with the surrounding solvent. We need to correct
-        free energy to take this into account. The correction is
-        solvation_correction * (
-               max_coodination_bonds -
-               number_of_coordination_bonds_in_mol).
-        Since coordination bonding can't reliably be detected from the molecule
-        graph, we search for all atoms within a radius of the metal atom and
-        discard them if they are positively charged.
-        """
-
-        # this method should only be called once, but just to be safe,
-        # reset the coordination bond count
-        self.number_of_coordination_bonds = 0
-
-        correction = 0.0
-
-        for i in self.m_inds:
-
-            species = self.species[i]
-            coordination_partners = []
-            radius = coordination_radius[species]
-
-            for j in range(self.num_atoms):
-                if j != i:
-                    displacement_vector = (
-                        self.atom_locations[j] -
-                        self.atom_locations[i])
-
-                    if (np.inner(displacement_vector, displacement_vector)
-                        < radius ** 2 and (
-                            self.partial_charges_resp[j] < 0 or
-                            self.partial_charges_mulliken[j] < 0)):
-                        coordination_partners.append(j)
-
-
-            number_of_coordination_bonds = len(coordination_partners)
-            self.number_of_coordination_bonds += number_of_coordination_bonds
-            correction += solvation_correction[species] * (
-                max_number_of_coordination_bonds[species] -
-                number_of_coordination_bonds)
-
-        return correction + self.free_energy
-
 
     def __repr__(self):
 
@@ -328,11 +258,3 @@ class MoleculeEntry(MSONable):
             return str(self) == str(other)
         else:
             return False
-
-
-
-
-class MoleculeEntryError(Exception):
-    def __init__(self, message):
-        super().__init__(message)
-        self.message = message

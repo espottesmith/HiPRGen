@@ -1,9 +1,11 @@
-from HiPRGen.mol_entry import *
+from HiPRGen.mol_entry import MoleculeEntry
 from functools import partial
 from itertools import chain
 from monty.serialization import dumpfn
 import pickle
-from HiPRGen.species_questions import *
+from HiPRGen.species_questions import run_decision_tree
+from HiPRGen.constants import Terminal
+import networkx as nx
 from time import localtime, strftime
 from networkx.algorithms.graph_hashing import weisfeiler_lehman_graph_hash
 import networkx.algorithms.isomorphism as iso
@@ -23,12 +25,7 @@ def sort_into_tags(mols):
     isomorphism_buckets = {}
     for mol in mols:
 
-        mol_hash = weisfeiler_lehman_graph_hash(
-            mol.covalent_graph,
-            node_attr='specie'
-        )
-
-        tag = (mol.charge, mol.formula, mol_hash)
+        tag = (mol.charge, mol.formula, mol.covalent_hash)
 
         if tag in isomorphism_buckets:
             isomorphism_buckets[tag].append(mol)
@@ -78,13 +75,31 @@ def log_message(string):
         '[' + strftime('%H:%M:%S', localtime()) + ']',
         string)
 
+
+class Coordimer:
+    """
+    we need to store as little as possible in each coordimer
+    """
+    def __init__(self, mol_entry):
+        self.electron_affinity = mol_entry.electron_affinity
+        self.ionization_energy = mol_entry.ionization_energy
+        self.free_energy = mol_entry.free_energy
+
 def species_filter(
         dataset_entries,
         mol_entries_pickle_location,
         species_report,
-        species_decision_tree=standard_species_decision_tree,
-        species_logging_decision_tree=standard_species_logging_decision_tree):
+        species_decision_tree,
+        coordimer_weight,
+        species_logging_decision_tree=Terminal.DISCARD,
+        generate_unfiltered_mol_pictures=False,
+        save_coordimers=False
+):
 
+    """
+    run each molecule through the species decision tree and then choose the lowest weight
+    coordimer based on the coordimer_weight function.
+    """
 
     log_message("starting species filter")
     log_message("loading molecule entries from json")
@@ -99,7 +114,7 @@ def species_filter(
         mol_entries_unfiltered,
         species_report,
         mol_pictures_folder_name='mol_pictures_unfiltered',
-        rebuild_mol_pictures=True
+        rebuild_mol_pictures=generate_unfiltered_mol_pictures
     )
 
     report_generator.emit_text("species report")
@@ -112,6 +127,7 @@ def species_filter(
     # than other more realistic lithomers.
 
     for i, mol in enumerate(mol_entries_unfiltered):
+        log_message("filtering " + mol.entry_id)
         decision_pathway = []
         if run_decision_tree(mol, species_decision_tree, decision_pathway):
             mol_entries_filtered.append(mol)
@@ -121,7 +137,8 @@ def species_filter(
             report_generator.emit_verbatim(
                 '\n'.join([str(f) for f in decision_pathway]))
 
-            report_generator.emit_text("libe string: " + mol.entry_id)
+            report_generator.emit_text("number: " + str(i))
+            report_generator.emit_text("entry id: " + mol.entry_id)
             report_generator.emit_text("uncorrected free energy: " +
                                        str(mol.free_energy))
 
@@ -142,11 +159,36 @@ def species_filter(
 
     report_generator.finished()
 
+
+    # python doesn't have shared memory. That means that every worker during
+    # reaction filtering must maintain its own copy of the molecules.
+    # for this reason, it is good to remove attributes that are only used
+    # during species filtering.
+    log_message("clearing unneeded attributes")
+    for m in mol_entries_filtered:
+        m.partial_charges_resp = None
+        m.partial_charges_mulliken = None
+        m.partial_charges_nbo = None
+        m.atom_locations = None
+
     # currently, take lowest energy mol in each iso class
     log_message("applying non local filters")
 
+    # when we choose a coordimer, we also keep track of the others
+    # so we can use them to compute redox rates
     def collapse_isomorphism_group(g):
-        return min(g,key=lambda x: x.solvation_free_energy)
+        lowest_energy_coordimer = min(g,key=coordimer_weight)
+
+        if save_coordimers:
+            if len(lowest_energy_coordimer.m_inds) > 0:
+                coordimers = {}
+
+                for m in g:
+                    coordimers[m.total_hash] = Coordimer(m)
+
+                lowest_energy_coordimer.coordimers = coordimers
+
+        return lowest_energy_coordimer
 
 
     mol_entries = []

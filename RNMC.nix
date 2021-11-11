@@ -2,14 +2,13 @@ with (import <nixpkgs> {});
 
 stdenv.mkDerivation rec {
   name = "RNMC";
-  hash = "b79436dc27feff194e485de649131784d7a6931c";
-  buildInputs = [gsl clang sqlite];
+  hash = "e1851452407555fc1385eea27a55337164b46813";
+  buildInputs = [gsl gcc sqlite];
   src = fetchurl {
     url = "https://github.com/BlauGroup/RNMC/archive/${hash}.tar.gz";
-    sha256 = "17md2pjsxlwg3cd5blr2fzjr0x369z9xsza4imyn7g6l67x8ym9g";
+    sha256 = "0bk8bz0hx0w6gpw29iq8h5kxpg1y5qipvsylyi2b7jbwv20zfgmv";
   };
-  buildPhase = "CC=clang ./build.sh";
-  installPhase = "mkdir $out && mkdir $out/bin && mv RNMC $out/bin";
+  buildPhase = ''CC="g++ -O3" ./build.sh'';
+  installPhase = "mkdir $out && mkdir $out/bin && mv ./build/GMC $out/bin";
 
 }
-

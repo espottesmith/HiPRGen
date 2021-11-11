@@ -3,16 +3,25 @@ from copy import deepcopy
 import os
 from pathlib import Path
 
+atom_colors = {
+    "H": "gray",
+    "C": "black",
+    "Li": "purple",
+    "B": "orange",
+    "N": "blue",
+    "O": "red",
+    "F": "green4",
+    "Mg": "green",
+    "P": "darkorange",
+    "S": "yellow",
+    "Cl": "chartreuse"
+}
+
 def visualize_molecule_entry(molecule_entry, path):
     """
     visualize a molecule using graphviz and
     output the resulting pdf to path
     """
-
-    atom_colors = {"O": "red",
-                   "H": "gray",
-                   "C": "black",
-                   "Li": "purple"}
 
     graph = deepcopy(molecule_entry.graph)
 
@@ -87,6 +96,7 @@ class ReportGenerator:
         self.f.write("\\usepackage{amsmath}\n")
         self.f.write("\\pagenumbering{gobble}\n")
         self.f.write("\\begin{document}\n")
+        self.f.write("\\setlength\\parindent{0pt}\n")
 
     def finished(self):
         self.f.write("\\end{document}")
@@ -153,7 +163,10 @@ class ReportGenerator:
 
         if 'dG' in reaction:
             self.f.write(
-                "\\xrightarrow{" + ("%.2f" % reaction["dG"]) + "}\n")
+                "\\xrightarrow["
+                + ("%.2f" % reaction["dG_barrier"]) +
+                "]{" +
+                ("%.2f" % reaction["dG"]) + "}\n")
         else:
             self.f.write(
                 "\\xrightarrow{}\n")
@@ -168,4 +181,17 @@ class ReportGenerator:
             self.emit_molecule(product_index)
 
         self.f.write("$$")
+        self.f.write("\n\n\n")
+
+    def emit_bond_breakage(self, reaction):
+        if 'reactant_bonds_broken' in reaction:
+            self.f.write("reactant bonds broken:")
+            for bond in reaction['reactant_bonds_broken']:
+                self.emit_verbatim(str(bond))
+
+        if 'product_bonds_broken' in reaction:
+            self.f.write("product bonds broken:")
+            for bond in reaction['product_bonds_broken']:
+                self.emit_verbatim(str(bond))
+
         self.f.write("\n\n\n")
