@@ -1,4 +1,4 @@
-from HiPRGen.network_loader import *
+from HiPRGen.network_loader import NetworkLoader
 import cairo
 import math
 import random
@@ -185,37 +185,16 @@ class RepulsiveSampler:
 
 
 
-class NetworkRenderer:
+class Renderer:
+
     def __init__(
             self,
-            network_loader,
-
-            # TODO: map species indices to positions and stylings
-            species_of_interest, # a map of species indexes to positions
-
-            # TODO: map reactions to stylings
-            # change name to reactions of interest
-            reactions_to_render, # list of reactions to render
-            output_file,
             width=1024,
             height=1024,
-            rejection_radius = 0.008,
-            node_radius = 0.0008,
-            background_line_width=0.001,
+            rejection_radius=0.01,
             global_mask_radius=0.47,
             colors = [(x,x,x) for x in [0.3,0.4,0.5,0.6,0.7,0.8]]
     ):
-
-        self.network_loader = network_loader
-        self.species_of_interest = species_of_interest
-        self.reactions_to_render = reactions_to_render
-        self.output_file = output_file
-        self.width = width
-        self.height = height
-        self.rejection_radius = rejection_radius
-        self.node_radius = node_radius
-        self.background_line_width = background_line_width
-        self.colors = colors
 
         self.repulsive_sampler = RepulsiveSampler(
             rejection_radius,
@@ -228,63 +207,54 @@ class NetworkRenderer:
                 else False )
         )
 
+        self.local_sampler = random.Random(42)
+        self.node_dict = {}
+
+        self.width = width
+        self.height = height
+        self.colors = colors
+
         self.surface = cairo.ImageSurface(cairo.Format.ARGB32, width, height)
         self.context = cairo.Context(self.surface)
         self.context.scale(width, height)
 
+    def new_node(self, tag, point=None):
+        # if point is None, a node position will be generated
+        # note: if you provide a point, it will go exactly where you say, which
+        # may be very close to other points. If tag already used, do nothing.
+        if tag not in self.node_dict:
 
-        self.species_locations = {}
+            if point is not None:
+                self.node_dict[tag] = (
+                    self.repulsive_sampler.quad_tree.insert(
+                        point[0],
+                        point[1],
+                        point))
 
-        if self.species_of_interest is not None:
-            for species_id in self.species_of_interest:
-                position = self.species_of_interest[species_id]
-                self.species_locations[species_id] = position
-                node = self.repulsive_sampler.quad_tree.find_node(*position)
-                node.data.append(position)
-
-        for i in range(self.network_loader.number_of_species):
-            if i not in self.species_locations:
-                self.species_locations[i] = self.repulsive_sampler.sample()
-
-
-    def render_reaction(self, reaction, color):
-        context = self.context
-        for i in range(reaction['number_of_reactants']):
-            for j in range(reaction['number_of_products']):
-                reactant_index = reaction['reactants'][i]
-                product_index = reaction['products'][j]
-
-                context.set_source_rgb(*color)
-                context.move_to(*self.species_locations[reactant_index])
-                context.line_to(*self.species_locations[product_index])
-                context.stroke()
-
-
-    def render(self):
-        context = self.context
-        local_sampler = random.Random(42)
-
-
-        context.set_line_width(self.background_line_width)
-
-        for reaction_id in self.reactions_to_render:
-            reaction = self.network_loader.index_to_reaction(reaction_id)
-            color = local_sampler.choice(self.colors)
-            self.render_reaction(reaction, color)
+            else:
+                self.node_dict[tag] = self.repulsive_sampler.sample()
 
 
 
-        # plot species nodes
-        context.set_source_rgb(0,0,0)
-        for i in range(self.network_loader.number_of_species):
-            context.arc(self.species_locations[i][0],
-                        self.species_locations[i][1],
-                        self.node_radius,
-                        0,
-                        2 * math.pi)
-
-            context.fill()
+    def draw_node(self, tag, color=(0,0,0), radius=0.0008):
+        point = self.node_dict[tag]
+        self.context.set_source_rgb(*color)
+        self.context.arc(point[0], point[1], radius, 0, 2 * math.pi)
+        self.context.fill()
 
 
+    def draw_edge(self, tag1, tag2, color=None, width=0.001):
+        if color is None:
+            color = self.local_sampler.choice(self.colors)
 
-        self.surface.write_to_png(self.output_file)
+
+        point1 = self.node_dict[tag1]
+        point2 = self.node_dict[tag2]
+        self.context.set_source_rgb(*color)
+        self.context.set_line_width(width)
+        self.context.move_to(*point1)
+        self.context.line_to(*point2)
+        self.context.stroke()
+
+    def render(self, path):
+        self.surface.write_to_png(path)
