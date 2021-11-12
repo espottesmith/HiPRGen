@@ -4,10 +4,12 @@ from HiPRGen.constants import ROOM_TEMP, KB
 from HiPRGen.reaction_questions import marcus_barrier
 from monty.serialization import dumpfn
 import math
+from scipy.stats import sem
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from itertools import chain
+from typing import List, Dict
 
 def default_cost(free_energy):
     return math.exp(min(10.0, free_energy) / (ROOM_TEMP * KB)) + 1
@@ -397,6 +399,39 @@ class SimulationReplayer:
         self.expected_final_state = (
             self.expected_final_state / len(self.network_loader.trajectories))
 
+    def compute_final_state_statistics(self, groups):
+
+        final_state_pertraj = {g: np.zeros(len(self.network_loader.trajectories)) for g in groups}
+        final_state_stats = {g: dict() for g in groups}
+
+        for ii, seed in enumerate(self.network_loader.trajectories):
+            state = np.copy(self.network_loader.initial_state_array)
+            for step in self.network_loader.trajectories[seed]:
+                reaction_index = self.network_loader.trajectories[seed][step][0]
+                reaction = self.network_loader.index_to_reaction(reaction_index)
+
+                for i in range(reaction['number_of_reactants']):
+                    reactant_index = reaction['reactants'][i]
+                    state[reactant_index] -= 1
+
+                for j in range(reaction['number_of_products']):
+                    product_index = reaction['products'][j]
+                    state[product_index] += 1
+
+            for g in groups:
+                for index in groups[g]:
+                    final_state_pertraj[g][ii] += state[index]
+
+        for g in groups:
+            data = final_state_pertraj[g]
+            mean = np.mean(data)
+            stdev = np.std(data)
+            stderr = sem(data)
+            final_state_stats[g] = {"mean": mean, "stdev": stdev, "stderr": stderr}
+
+        return final_state_stats
+
+
     def compute_production_consumption_info(self):
         self.consuming_reactions = {}
         self.producing_reactions = {}
@@ -426,42 +461,54 @@ class SimulationReplayer:
                     else:
                         self.producing_reactions[product_index][reaction_index] += 1
 
-    def compute_state_time_series(self, seed):
+    def compute_state_time_series(self, seed, snapshots, max_length=None):
         state_dimension_size = len(self.network_loader.initial_state_array)
-        step_dimension_size = len(self.network_loader.trajectories[seed])
+
+        step_dimension_size = snapshots
+
+        if max_length is None:
+            length = len(self.network_loader.trajectories[seed])
+            interval = int(length / snapshots)
+        else:
+            length = max_length
+            interval = int(max_length / snapshots)
         time_series = np.zeros(
             (step_dimension_size, state_dimension_size),
             dtype=int)
 
         state = np.copy(self.network_loader.initial_state_array)
-        for step in self.network_loader.trajectories[seed]:
-            reaction_index = self.network_loader.trajectories[seed][step][0]
-            time = self.network_loader.trajectories[seed][step][1]
-            reaction = self.network_loader.index_to_reaction(reaction_index)
+        point = 0
 
-            for i in range(reaction['number_of_reactants']):
-                reactant_index = reaction['reactants'][i]
-                state[reactant_index] -= 1
+        this_max = len(self.network_loader.trajectories[seed])
+        for step in range(length):
+            if step < this_max:
+                reaction_index = self.network_loader.trajectories[seed][step][0]
+                reaction = self.network_loader.index_to_reaction(reaction_index)
 
-            for j in range(reaction['number_of_products']):
-                product_index = reaction['products'][j]
-                state[product_index] += 1
+                for i in range(reaction['number_of_reactants']):
+                    reactant_index = reaction['reactants'][i]
+                    state[reactant_index] -= 1
 
-            time_series[step] = state
+                for j in range(reaction['number_of_products']):
+                    product_index = reaction['products'][j]
+                    state[product_index] += 1
+
+            if step % interval == 0:
+                time_series[point] = state
+                point += 1
 
         return time_series
-
 
     def time_series_graph(
             self,
             seeds,
             species_of_interest,
             path,
+            snapshots=None,
             colors = list(mcolors.TABLEAU_COLORS.values()),
             styles = ['solid', 'dotted', 'dashed', 'dashdot'],
             internal_index_labels=True
     ):
-
 
         max_trajectory_length = 0
         for seed in seeds:
@@ -469,15 +516,18 @@ class SimulationReplayer:
                 max_trajectory_length,
                 len(self.network_loader.trajectories[seed]))
 
+        if snapshots is None:
+            snapshots = max_trajectory_length
+
         total_time_series = np.zeros(
-            (max_trajectory_length, self.network_loader.number_of_species),
+            (snapshots, self.network_loader.number_of_species),
             dtype=int
             )
 
         for seed in seeds:
-            total_time_series += pad_time_series(
-                self.compute_state_time_series(seed),
-                max_trajectory_length)
+            total_time_series += self.compute_state_time_series(seed,
+                                                                snapshots=snapshots,
+                                                                max_length=max_trajectory_length)
 
         total_time_series = total_time_series / len(seeds)
 
@@ -665,22 +715,6 @@ def export_consumption_to_json(simulation_replayer, species_index, path):
             'producing_reactions' : producing_reactions,
             'consuming_reactions' : consuming_reactions},
                path)
-
-def pad_time_series(time_series, max_number_of_steps):
-    num_steps = time_series.shape[0]
-    state_size = time_series.shape[1]
-    padded_time_series = np.zeros(
-        (max_number_of_steps, state_size),
-        dtype=int)
-
-    for step in range(max_number_of_steps):
-        if step < num_steps:
-            padded_time_series[step] = time_series[step]
-        else:
-            padded_time_series[step] = time_series[num_steps-1]
-
-    return padded_time_series
-
 
 
 def export_sinks_to_json(simulation_replayer, path):
