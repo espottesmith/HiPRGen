@@ -5,9 +5,11 @@ from HiPRGen.reaction_questions import marcus_barrier
 from monty.serialization import dumpfn
 import math
 import numpy as np
+from scipy.stats import sem
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from itertools import chain
+from typing import List, Dict
 
 def default_cost(free_energy):
     return math.exp(min(10.0, free_energy) / (ROOM_TEMP * KB)) + 1
@@ -371,6 +373,40 @@ class SimulationReplayer:
 
         self.expected_final_state = (
             self.expected_final_state / len(self.network_loader.trajectories))
+
+    def compute_final_state_statistics(self, groups):
+
+        final_state_pertraj = {g: np.zeros(len(self.network_loader.trajectories)) for g in groups}
+        final_state_stats = {g: dict() for g in groups}
+
+        for ii, seed in enumerate(self.network_loader.trajectories):
+            state = np.copy(self.network_loader.initial_state_array)
+            for step in self.network_loader.trajectories[seed]:
+                reaction_index = self.network_loader.trajectories[seed][step][0]
+                reaction = self.network_loader.index_to_reaction(reaction_index)
+
+                for i in range(reaction['number_of_reactants']):
+                    reactant_index = reaction['reactants'][i]
+                    state[reactant_index] -= 1
+
+                for j in range(reaction['number_of_products']):
+                    product_index = reaction['products'][j]
+                    state[product_index] += 1
+
+            for g in groups:
+                for index in groups[g]:
+                    final_state_pertraj[g][ii] += state[index]
+
+        for g in groups:
+            data = final_state_pertraj[g]
+            mean = np.mean(data)
+            stdev = np.std(data)
+            stderr = sem(data)
+            final_state_stats[g] = {"mean": mean, "stdev": stdev, "stderr": stderr}
+
+        return final_state_stats
+
+
 
     def compute_production_consumption_info(self):
         self.consuming_reactions = {}
