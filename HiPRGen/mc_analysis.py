@@ -701,7 +701,6 @@ class SimulationReplayer:
                     index not in species_of_interest):
                     background_species.add(index)
 
-
         line_dict = {}
         i = 0
         for species_index in species_of_interest:
@@ -709,7 +708,6 @@ class SimulationReplayer:
             q = i // len(colors)
             line_dict[species_index] = (colors[r], styles[q])
             i += 1
-
 
         fig, (ax0, ax1, ax2) = plt.subplots(
             3, 1,
@@ -727,7 +725,6 @@ class SimulationReplayer:
         ax1.set_xlim([0,total_time_series.shape[0]])
         ax1.set_ylim([0,(y_max+1)/10])
 
-
         ticks = np.arange(0, total_time_series.shape[0])
         for i, species_index in enumerate(background_species):
             ax0.plot(ticks,
@@ -740,11 +737,7 @@ class SimulationReplayer:
                      color=mcolors.hsv_to_rgb((0,0,0.9))
                      )
 
-
-
         for species_index in species_of_interest:
-
-
             ax0.plot(ticks,
                      total_time_series[:, species_index],
                      color=line_dict[species_index][0],
@@ -757,15 +750,12 @@ class SimulationReplayer:
                      linestyle=line_dict[species_index][1]
                      )
 
-
-
         # creating a legend
         ax2.yaxis.set_visible(False)
         ax2.xaxis.set_visible(False)
         ax2.set_axis_off()
         ax2.set_xlim([0,1])
         ax2.set_ylim([0,1])
-
 
         i = 0
         for species_index in species_of_interest:
