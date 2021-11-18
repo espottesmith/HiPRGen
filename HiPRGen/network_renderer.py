@@ -80,6 +80,7 @@ class QuadTreeNode:
     def insert(self, x, y, val):
         node = self.find_node(x,y)
         node.data.append(val)
+        return val
 
     def find_neighborhood(self,x,y):
         """
@@ -191,7 +192,7 @@ class Renderer:
             self,
             width=1024,
             height=1024,
-            rejection_radius=0.01,
+            rejection_radius=0.005,
             global_mask_radius=0.47,
             colors = [(x,x,x) for x in [0.3,0.4,0.5,0.6,0.7,0.8]]
     ):
@@ -211,6 +212,7 @@ class Renderer:
         self.node_dict = {}
 
         self.width = width
+        self.global_mask_radius = global_mask_radius
         self.height = height
         self.colors = colors
 
@@ -235,6 +237,11 @@ class Renderer:
                 self.node_dict[tag] = self.repulsive_sampler.sample()
 
 
+    def new_node_boundary(self, tag, angle):
+        point = (0.5 + self.global_mask_radius * math.cos(angle),
+                 0.5 + self.global_mask_radius * math.sin(angle))
+
+        self.new_node(tag, point=point)
 
     def draw_node(self, tag, color=(0,0,0), radius=0.0008):
         point = self.node_dict[tag]
@@ -242,6 +249,11 @@ class Renderer:
         self.context.arc(point[0], point[1], radius, 0, 2 * math.pi)
         self.context.fill()
 
+    def draw_node_square(self, tag, color=(0,0,0), side=0.005):
+        point = self.node_dict[tag]
+        self.context.set_source_rgb(*color)
+        self.context.rectangle(point[0] - side/2, point[1] - side/2, side, side)
+        self.context.fill()
 
     def draw_edge(self, tag1, tag2, color=None, width=0.001):
         if color is None:
