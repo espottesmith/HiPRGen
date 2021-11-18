@@ -437,43 +437,54 @@ class SimulationReplayer:
                     else:
                         self.producing_reactions[product_index][reaction_index] += 1
 
-    def compute_state_time_series(self, seed):
+    def compute_state_time_series(self, seed, snapshots, max_length=None):
         state_dimension_size = len(self.network_loader.initial_state_array)
-        step_dimension_size = len(self.network_loader.trajectories[seed])
+
+        step_dimension_size = snapshots
+
+        if max_length is None:
+            length = len(self.network_loader.trajectories[seed])
+            interval = int(length / snapshots)
+        else:
+            length = max_length
+            interval = int(max_length / snapshots)
         time_series = np.zeros(
             (step_dimension_size, state_dimension_size),
             dtype=int)
 
         state = np.copy(self.network_loader.initial_state_array)
-        for step in self.network_loader.trajectories[seed]:
-            reaction_index = self.network_loader.trajectories[seed][step][0]
-            time = self.network_loader.trajectories[seed][step][1]
-            reaction = self.network_loader.index_to_reaction(reaction_index)
+        point = 0
 
-            for i in range(reaction['number_of_reactants']):
-                reactant_index = reaction['reactants'][i]
-                state[reactant_index] -= 1
+        this_max = len(self.network_loader.trajectories[seed])
+        for step in range(length):
+            if step < this_max:
+                reaction_index = self.network_loader.trajectories[seed][step][0]
+                reaction = self.network_loader.index_to_reaction(reaction_index)
 
-            for j in range(reaction['number_of_products']):
-                product_index = reaction['products'][j]
-                state[product_index] += 1
+                for i in range(reaction['number_of_reactants']):
+                    reactant_index = reaction['reactants'][i]
+                    state[reactant_index] -= 1
 
-            time_series[step] = state
+                for j in range(reaction['number_of_products']):
+                    product_index = reaction['products'][j]
+                    state[product_index] += 1
+
+            if step % interval == 0:
+                time_series[point] = state
+                point += 1
 
         return time_series
-
 
     def time_series_graph(
             self,
             seeds,
-            # if species_list is none, an appropriate one will be computed.
-            species_list,
+            species_of_interest,
             path,
+            snapshots=None,
             colors = list(mcolors.TABLEAU_COLORS.values()),
             styles = ['solid', 'dotted', 'dashed', 'dashdot'],
             internal_index_labels=True
     ):
-
 
         max_trajectory_length = 0
         for seed in seeds:
@@ -481,34 +492,35 @@ class SimulationReplayer:
                 max_trajectory_length,
                 len(self.network_loader.trajectories[seed]))
 
+        if snapshots is None:
+            snapshots = max_trajectory_length
+
         total_time_series = np.zeros(
-            (max_trajectory_length, self.network_loader.number_of_species),
+            (snapshots, self.network_loader.number_of_species),
             dtype=int
             )
 
         for seed in seeds:
-            total_time_series += pad_time_series(
-                self.compute_state_time_series(seed),
-                max_trajectory_length)
+            total_time_series += self.compute_state_time_series(seed,
+                                                                snapshots=snapshots,
+                                                                max_length=max_trajectory_length)
 
         total_time_series = total_time_series / len(seeds)
 
-        if species_list is None:
-            species_list = set()
-            for index in range(self.network_loader.number_of_species):
-                for step in range(max_trajectory_length):
-                    if total_time_series[step,index] > 0.1:
-                        species_list.add(index)
-
+        background_species = set()
+        for index in range(self.network_loader.number_of_species):
+            for step in range(max_trajectory_length):
+                if (total_time_series[step,index] > 0.1 and
+                    index not in species_of_interest):
+                    background_species.add(index)
 
         line_dict = {}
         i = 0
-        for species_index in species_list:
+        for species_index in species_of_interest:
             r = i % len(colors)
             q = i // len(colors)
             line_dict[species_index] = (colors[r], styles[q])
             i += 1
-
 
         fig, (ax0, ax1, ax2) = plt.subplots(
             3, 1,
@@ -517,7 +529,7 @@ class SimulationReplayer:
 
         y_max = 0
         for step in range(total_time_series.shape[0]):
-            for species_index in species_list:
+            for species_index in species_of_interest:
                 y_max = max(y_max, total_time_series[step,species_index])
 
         ax0.set_xlim([0,total_time_series.shape[0]])
@@ -526,12 +538,19 @@ class SimulationReplayer:
         ax1.set_xlim([0,total_time_series.shape[0]])
         ax1.set_ylim([0,(y_max+1)/10])
 
+        ticks = np.arange(0, total_time_series.shape[0])
+        for i, species_index in enumerate(background_species):
+            ax0.plot(ticks,
+                     total_time_series[:, species_index],
+                     color=mcolors.hsv_to_rgb((0,0,0.9))
+                     )
 
+            ax1.plot(ticks,
+                     total_time_series[:, species_index],
+                     color=mcolors.hsv_to_rgb((0,0,0.9))
+                     )
 
-        for species_index in species_list:
-
-            ticks = np.arange(0, total_time_series.shape[0])
-
+        for species_index in species_of_interest:
             ax0.plot(ticks,
                      total_time_series[:, species_index],
                      color=line_dict[species_index][0],
@@ -544,8 +563,6 @@ class SimulationReplayer:
                      linestyle=line_dict[species_index][1]
                      )
 
-
-
         # creating a legend
         ax2.yaxis.set_visible(False)
         ax2.xaxis.set_visible(False)
@@ -553,9 +570,8 @@ class SimulationReplayer:
         ax2.set_xlim([0,1])
         ax2.set_ylim([0,1])
 
-
         i = 0
-        for species_index in species_list:
+        for species_index in species_of_interest:
             if internal_index_labels:
                 label = str(species_index)
             else:
@@ -580,7 +596,7 @@ class SimulationReplayer:
                      verticalalignment='center')
             i += 1
 
-        fig.savefig(path)
+        fig.savefig(path, transparent=True)
 
 
     def compute_sink_data(self):
