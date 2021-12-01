@@ -1,4 +1,5 @@
 from HiPRGen.report_generator import ReportGenerator
+from HiPRGen.network_renderer import Renderer
 from HiPRGen.network_loader import NetworkLoader
 from HiPRGen.constants import ROOM_TEMP, KB
 from HiPRGen.reaction_questions import marcus_barrier
@@ -9,10 +10,172 @@ from scipy.stats import sem
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from itertools import chain
+from multiprocessing import Pool
 from typing import List, Dict
 
 def default_cost(free_energy):
     return math.exp(min(10.0, free_energy) / (ROOM_TEMP * KB)) + 1
+
+
+def compute_starting_angle(l, step):
+    if l % 2 == 1:
+        return - int(l / 2) * step
+    else:
+        return - ((l / 2) * step) + 0.05
+
+
+
+def render_reactions_which_fired(network_loader, sinks, colors, path):
+    renderer = Renderer()
+    reactions_which_fired = set()
+    for seed in network_loader.trajectories:
+        for step in network_loader.trajectories[seed]:
+            reaction_id = network_loader.trajectories[seed][step][0]
+            reaction = network_loader.index_to_reaction(reaction_id)
+            reactions_which_fired.add(reaction_id)
+
+    starting_species_count = 0
+    for species_id in range(network_loader.number_of_species):
+        if network_loader.initial_state_array[species_id] > 0:
+            starting_species_count += 1
+
+
+    left_angle_counter_step = 0.1
+    left_angle_counter = math.pi + compute_starting_angle(
+        starting_species_count,
+        left_angle_counter_step
+    )
+
+    for species_id in range(network_loader.number_of_species):
+        if network_loader.initial_state_array[species_id] > 0:
+
+            renderer.new_node_boundary(species_id, left_angle_counter)
+            left_angle_counter += left_angle_counter_step
+
+        else:
+            renderer.new_node(species_id)
+
+    for reaction_id in reactions_which_fired:
+        print(reaction_id)
+        reaction = network_loader.index_to_reaction(reaction_id)
+        for i in range(reaction['number_of_reactants']):
+            for j in range(reaction['number_of_products']):
+                reactant_id = reaction['reactants'][i]
+                product_id = reaction['products'][j]
+                dG = reaction['dG']
+                renderer.draw_edge(reactant_id, product_id)
+
+    for species_id in range(network_loader.number_of_species):
+        if network_loader.initial_state_array[species_id] > 0:
+            renderer.draw_node(species_id, radius=0.008)
+        elif species_id in sinks:
+            if species_id in colors:
+                renderer.draw_node_square(species_id, color=colors[species_id], side=0.013)
+            else:
+                renderer.draw_node_square(species_id, side=0.013)
+
+        else:
+            renderer.draw_node(species_id)
+
+    renderer.render(path)
+
+
+class PathfindingTransfer:
+    def __init__(self,pathfinding,threshold):
+        self.pathfinding = pathfinding
+        self.threshold = threshold
+
+    def __call__(self, species_id):
+        result = set()
+        pathways = self.pathfinding.compute_pathways(species_id)
+        pathways_sorted = sorted(pathways, key=lambda p: pathways[p]['weight'])
+
+        for p in pathways_sorted[0:self.threshold]:
+            result.update(p)
+
+        return result
+
+
+
+
+def render_top_pathways(pathfinding, sinks, colors, output_path, num_threads=8, threshold=5):
+    renderer = Renderer()
+    reactions_in_top_pathways = set()
+    species_in_top_pathways = set()
+
+    pathfinding_transfer = PathfindingTransfer(pathfinding, threshold)
+
+    with Pool(num_threads) as p:
+        for result in p.map(pathfinding_transfer, sinks):
+            reactions_in_top_pathways.update(result)
+
+    for reaction_id in reactions_in_top_pathways:
+        reaction = pathfinding.network_loader.index_to_reaction(reaction_id)
+
+        for i in range(reaction['number_of_reactants']):
+            reactant_id = reaction['reactants'][i]
+            species_in_top_pathways.add(reactant_id)
+
+        for j in range(reaction['number_of_products']):
+            product_id = reaction['products'][j]
+            species_in_top_pathways.add(product_id)
+
+
+    starting_species_count = 0
+    for species_id in range(pathfinding.network_loader.number_of_species):
+        if pathfinding.network_loader.initial_state_array[species_id] > 0:
+            starting_species_count += 1
+
+
+    left_angle_counter_step = 0.1
+    left_angle_counter = math.pi + compute_starting_angle(
+        starting_species_count,
+        left_angle_counter_step
+    )
+    right_angle_counter_step = 0.1
+    right_angle_counter = compute_starting_angle(
+        len(sinks),
+        right_angle_counter_step
+    )
+
+    for species_id in range(pathfinding.network_loader.number_of_species):
+        if pathfinding.network_loader.initial_state_array[species_id] > 0:
+
+            renderer.new_node_boundary(species_id, left_angle_counter)
+            left_angle_counter += left_angle_counter_step
+
+        elif species_id in sinks:
+
+            renderer.new_node_boundary(species_id, right_angle_counter)
+            right_angle_counter += right_angle_counter_step
+
+        else:
+            renderer.new_node(species_id)
+
+
+    for reaction_id in reactions_in_top_pathways:
+        print(reaction_id)
+        reaction = pathfinding.network_loader.index_to_reaction(reaction_id)
+        for i in range(reaction['number_of_reactants']):
+            for j in range(reaction['number_of_products']):
+                reactant_id = reaction['reactants'][i]
+                product_id = reaction['products'][j]
+                renderer.draw_edge(reactant_id, product_id)
+
+
+    for species_id in species_in_top_pathways:
+
+        if pathfinding.network_loader.initial_state_array[species_id] > 0:
+            renderer.draw_node(species_id, radius=0.008)
+        elif species_id in sinks:
+            if species_id in colors:
+                renderer.draw_node_square(species_id, color=colors[species_id], side=0.013)
+            else:
+                renderer.draw_node_square(species_id, side=0.013)
+        else:
+            renderer.draw_node(species_id)
+
+    renderer.render(output_path)
 
 
 def redox_report(
@@ -48,14 +211,26 @@ def reaction_tally_report(
         cutoff=10):
 
     reaction_tally = {}
+    species_set = set()
     for seed in network_loader.trajectories:
         for step in network_loader.trajectories[seed]:
             reaction_id = network_loader.trajectories[seed][step][0]
+
+            reaction = network_loader.index_to_reaction(reaction_id)
 
             if reaction_id in reaction_tally:
                 reaction_tally[reaction_id] += 1
             else:
                 reaction_tally[reaction_id] = 1
+
+            for i in range(reaction['number_of_reactants']):
+                reactant_id = reaction['reactants'][i]
+                species_set.add(reactant_id)
+
+            for j in range(reaction['number_of_products']):
+                product_id = reaction['products'][j]
+                species_set.add(product_id)
+
 
 
     report_generator = ReportGenerator(
@@ -64,6 +239,19 @@ def reaction_tally_report(
         rebuild_mol_pictures=False)
 
     report_generator.emit_text("reaction tally report")
+    report_generator.emit_text(
+        "total number of reactions: " +
+        str(network_loader.number_of_reactions))
+    report_generator.emit_text(
+        "number of reactions which fired: " +
+        str(len(reaction_tally.keys())))
+    report_generator.emit_text(
+        "total number of species: " +
+        str(network_loader.number_of_species))
+    report_generator.emit_text(
+        "number of species observed: " +
+        str(len(species_set)))
+
 
     for (reaction_index, number) in sorted(
             reaction_tally.items(), key=lambda pair: -pair[1]):
@@ -78,6 +266,9 @@ def reaction_tally_report(
     report_generator.finished()
 
 def species_report(network_loader, species_report_path):
+    """
+    print all species
+    """
     report_generator = ReportGenerator(
         network_loader.mol_entries,
         species_report_path,
@@ -94,6 +285,26 @@ def species_report(network_loader, species_report_path):
         report_generator.emit_newline()
 
     report_generator.finished()
+
+def reaction_report(network_loader, reaction_report_path):
+    """
+    print all reactions. Warning: don't do this for a big network
+    """
+    report_generator = ReportGenerator(
+        network_loader.mol_entries,
+        reaction_report_path,
+        rebuild_mol_pictures=False)
+
+    report_generator.emit_text("reaction report")
+    for i in range(network_loader.number_of_reactions):
+        reaction = network_loader.index_to_reaction(i)
+        report_generator.emit_reaction(reaction)
+        report_generator.emit_newline()
+
+    report_generator.finished()
+
+
+
 
 
 class Pathfinding:

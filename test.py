@@ -232,6 +232,9 @@ def li_test():
         folder + '/initial_state.sqlite'
         )
 
+    network_loader.load_trajectories()
+    network_loader.load_initial_state()
+
 
 
     # HiPRGen has analysis tools to understand what happened in our simulation.
@@ -265,6 +268,15 @@ def li_test():
         folder + '/LEDC_pathways.tex',
         sort_by_frequency=False
     )
+
+    generate_pathway_report(
+        pathfinding,
+        130,
+        folder + '/130_pathways.tex',
+        sort_by_frequency=False
+    )
+
+
 
     species_report(network_loader, folder + '/species_report.tex')
 
@@ -399,6 +411,11 @@ def mg_test():
         folder + '/initial_state.sqlite'
         )
 
+    network_loader.load_trajectories()
+    network_loader.load_initial_state()
+
+
+
     report_generator = ReportGenerator(
         network_loader.mol_entries,
         folder + '/dummy.tex',
@@ -462,4 +479,5 @@ tests = [
 
 for test in tests:
     if not test():
-        break
+        exit(1)
+

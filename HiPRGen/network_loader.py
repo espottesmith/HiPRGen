@@ -49,8 +49,6 @@ class NetworkLoader:
 
         if initial_state_database:
             self.initial_state_con = sqlite3.connect(initial_state_database)
-            self.load_trajectories()
-            self.load_initial_state()
 
         self.reactions = {}
 
@@ -74,7 +72,6 @@ class NetworkLoader:
         """
         get range of reactions from database but don't cache them
         """
-        result = []
         cur = self.rn_con.cursor()
         for res in cur.execute(sql_get_reaction_range,
                                (lower_bound, upper_bound)):
@@ -87,9 +84,7 @@ class NetworkLoader:
             reaction['rate'] = res[7]
             reaction['dG'] = res[8]
             reaction['dG_barrier'] = res[9]
-            result.append(reaction)
-
-        return result
+            yield reaction
 
 
     def index_to_reaction(self, reaction_index):
