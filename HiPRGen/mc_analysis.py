@@ -719,10 +719,15 @@ class SimulationReplayer:
 
         total_time_series = total_time_series / len(seeds)
 
+        interval = int(max_trajectory_length / snapshots)
+
         background_species = set()
         for index in range(self.network_loader.number_of_species):
             for step in range(max_trajectory_length):
-                if (total_time_series[step // snapshots, index] > 0.1 and
+                thissnap = step // interval
+                if thissnap >= snapshots:
+                    thissnap = snapshots - 1
+                if (total_time_series[thissnap, index] > 0.1 and
                     index not in species_of_interest):
                     background_species.add(index)
 
