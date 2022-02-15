@@ -555,8 +555,8 @@ class SimulationReplayer:
 
 
         self.compute_expected_final_state()
-        self.compute_production_consumption_info()
-        self.compute_sink_data()
+        # self.compute_production_consumption_info()
+        # self.compute_sink_data()
 
 
     def compute_expected_final_state(self):
